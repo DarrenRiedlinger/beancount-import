@@ -1,7 +1,7 @@
 import collections
 import datetime
 import re
-from typing import List, Optional, Union, Callable, Dict, Mapping, Tuple, Any, Iterable, Set, NamedTuple
+from typing import List, Optional, Union, Callable, Dict, Mapping, Tuple, Any, Iterable, Set, NamedTuple, Literal
 import argparse
 import os
 import tempfile
@@ -43,6 +43,14 @@ AcceptCandidateResult = NamedTuple('AcceptCandidateResult', [
     ('modified_filenames', List[str]),
 ])
 
+# Type definition for user-supplied transaction preprocessing function
+PreprocessorResult = NamedTuple('PreprocessorResult', [
+    ('transaction', Optional[Transaction]),  # Modified transaction or None to skip
+    ('action', Literal["ignore", # Write to ignore path
+                       "record", # Write to corresponding ledger
+                       "continue", # Don't write to ledger. Allow further review in web-ui
+                       ]),
+])
 
 def is_account_unknown(posting: Posting) -> bool:
     return is_unknown_account(posting.account)
@@ -362,7 +370,6 @@ def make_pending_entry(import_result: ImportResult, source: Optional[Source]):
         id=identifier,
     )
 
-
 class LoadedReconciler(object):
     """Represents the loaded reconciler state."""
 
@@ -674,11 +681,38 @@ class LoadedReconciler(object):
                     if key in self.balance_entries:
                         continue
                     self.balance_entries[key] = entry.amount.number
-                else:
-                    pending_transaction_ids.add(id(entry))
-                    posting_db.add_transaction(entry)
-                    only_balance_or_price = False
-                filtered_entries.append(entry)
+                else: # It is a Transaction
+                    # Apply transaction preprocessors if configured
+                    if hasattr(self.reconciler, 'options') and \
+                       'transaction_preprocessors' in self.reconciler.options:
+                        add_to_import_list = True
+                        for preprocessor in self.reconciler.options['transaction_preprocessors']:
+                            result = preprocessor(entry)
+                            if result.transaction is None:
+                                continue # Continue to next preprocessor
+                            if result.action == "ignore":
+                                stage = self.editor.stage_changes()
+                                stage.add_entry(result.transaction, self.reconciler.ignore_path)
+                                stage.apply()
+                                entry = None
+                                break
+                            if result.action == "record":
+                                stage = self.editor.stage_changes()
+                                output_filename = self.reconciler.entry_file_selector(result.transaction)
+                                stage.add_entry(result.transaction, output_filename)
+                                stage.apply()
+                                self.posting_db.add_transaction(result.transaction)
+                                entry = None
+                                break
+                            if result.action == "continue":
+                                entry = result.transaction
+                                break
+                    if entry:
+                        pending_transaction_ids.add(id(entry))
+                        posting_db.add_transaction(entry)
+                        only_balance_or_price = False
+                if entry:
+                    filtered_entries.append(entry)
             if only_balance_or_price:
                 balance_and_price_entries.extend(filtered_entries)
                 continue

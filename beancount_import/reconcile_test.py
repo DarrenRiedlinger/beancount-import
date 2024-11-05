@@ -346,3 +346,38 @@ def test_amazon_large_matching(tmpdir: py.path.local):
             ],
         ),
     )
+
+def test_transaction_preprocessors(tmpdir: py.path.local):
+    def test_preprocessor(transaction):
+        # Skip transaction
+        if "UNION MARKET" in transaction.narration:
+            return PreprocessorResult(transaction=None, action="continue")
+        # Ignore transaction
+        if "TAKAHACHI" in transaction.narration:
+            return PreprocessorResult(transaction=transaction, action="ignore")
+        # Modify + record transaction
+        if "PRUNE" in transaction.narration:
+            modified_txn = transaction._replace(narration=transaction.narration + " (modified)")
+            return PreprocessorResult(transaction=modified_txn, action="record")
+        return PreprocessorResult(transaction=transaction, auto_record=False)
+
+    tester = ReconcileGoldenTester(
+        golden_directory=os.path.join(testdata_root, 'reconcile', 'test_transaction_preprocessors'),
+        temp_dir=str(tmpdir),
+        options=dict(
+            write=True,
+            data_sources=[
+                {
+                    'module': 'beancount_import.source.ofx',
+                    'ofx_filenames': [
+                        os.path.join(testdata_root, 'source', 'ofx',
+                                     'amex.ofx')
+                    ],
+                },
+            ],
+            transaction_preprocessors=[test_preprocessor],
+        ),
+    )
+    # The test will validate against golden files in testdata/reconcile/test_preprocessor/
+    # which should contain the expected state after preprocessing
+    tester.snapshot()    

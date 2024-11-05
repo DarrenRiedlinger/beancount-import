@@ -7,6 +7,8 @@ import sys
 
 from _config import my_foobar_bank_importer, my_amex_cc_importer
 
+from custom_preprocessors import my_custom_preprocessor
+
 def run_reconcile(extra_args):
     import beancount_import.webserver
 
@@ -60,6 +62,7 @@ def run_reconcile(extra_args):
         ],
         price_output=os.path.join(journal_dir, 'prices.beancount'),
         data_sources=data_sources,
+        transaction_preprocessors=[my_custom_preprocessor],
     )
 
 
